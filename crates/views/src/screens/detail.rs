@@ -1,4 +1,4 @@
-use gpui::accesskit::Role;
+use gpui::accesskit::{Role, Toggled};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Entity, Hsla, Pixels, Point, Render, ScrollHandle, SharedString,
@@ -652,6 +652,7 @@ impl DetailView {
                                 .small()
                                 .outline()
                                 .selected(tab == self.rail_tab)
+                                .aria_toggled(Toggled::from(tab == self.rail_tab))
                                 .on_click(move |_, _, cx| {
                                     opened
                                         .update(cx, |this, cx| {
@@ -671,15 +672,16 @@ impl DetailView {
                 )
             }
         };
+        let count = match tab {
+            RailTab::Albums => albums,
+            RailTab::Artists => artists,
+        };
         vec![self.rails[0].render(
             RailSpec {
                 tag: "detail-also-like",
                 place: 0,
                 title: t!("album-also-like"),
-                count: match tab {
-                    RailTab::Albums => albums,
-                    RailTab::Artists => artists,
-                },
+                count,
                 tile: card,
                 columns,
                 tabs,
@@ -698,18 +700,24 @@ impl DetailView {
                         let Some(album) = detail.also_like().get(position) else {
                             return div().into_any_element();
                         };
-                        cards::album_card(("detail-also-like", position), album, &held.playback, cx)
+                        let id = SharedString::from(format!("detail-also-like-{}", album.id));
+                        cards::album_card(id, album, &held.playback, cx)
                             .tile(card)
                             .flat()
+                            .aria_position_in_set(position + 1)
+                            .aria_size_of_set(count)
                             .into_any_element()
                     }
                     RailTab::Artists => {
                         let Some(artist) = detail.similar().get(position) else {
                             return div().into_any_element();
                         };
-                        cards::artist_card(("detail-similar", position), artist, &held.playback, cx)
+                        let id = SharedString::from(format!("detail-similar-{}", artist.id));
+                        cards::artist_card(id, artist, &held.playback, cx)
                             .tile(card)
                             .flat()
+                            .aria_position_in_set(position + 1)
+                            .aria_size_of_set(count)
                             .into_any_element()
                     }
                 }
@@ -735,7 +743,12 @@ impl DetailView {
                 .min_w_0()
                 .text_size(theme.text(Text::Tiny))
                 .text_color(theme.muted_foreground)
-                .children(notices)
+                .children(
+                    notices
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, notice)| ui::spoken(("detail-notice", index), notice)),
+                )
                 .into_any_element(),
         )
     }

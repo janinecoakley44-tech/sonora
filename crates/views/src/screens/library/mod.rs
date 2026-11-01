@@ -13,8 +13,8 @@ use crate::shared::playlist_editor::{Edit, PlaylistEditor};
 use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, FontWeight, MouseButton, Pixels, Point, Render, ScrollHandle,
-    SharedString, WeakEntity, Window, div, point, px, relative,
+    AnyElement, App, Context, ElementId, Entity, FontWeight, MouseButton, Pixels, Point, Render,
+    ScrollHandle, SharedString, WeakEntity, Window, div, point, px, relative,
 };
 use i18n::t;
 use music::{Shape, Track};
@@ -518,7 +518,11 @@ impl LibraryView {
             ),
         };
         let shape = self.library.read(cx).shape(self.shelf);
-        Some(Vacancy::new(caption).icon(self.section.glyph(shape)))
+        Some(
+            Vacancy::new(caption)
+                .spoken("library-scanning")
+                .icon(self.section.glyph(shape)),
+        )
     }
 
     fn note(&self, cx: &App) -> Option<Vacancy> {
@@ -533,7 +537,9 @@ impl LibraryView {
             let table = self.table(self.section);
             return match (table.row_count(cx), table.filtering(cx)) {
                 (0, false) => Some(trouble::offline()),
-                (0, true) => Some(Vacancy::new(t!("library-no-matches"))),
+                (0, true) => {
+                    Some(Vacancy::new(t!("library-no-matches")).spoken("library-no-matches"))
+                }
                 _ => None,
             };
         }
@@ -555,7 +561,7 @@ impl LibraryView {
         let shape = library.shape(self.shelf);
 
         Some(match (table.filtering(cx), problem) {
-            (true, _) => Vacancy::new(t!("library-no-matches")),
+            (true, _) => Vacancy::new(t!("library-no-matches")).spoken("library-no-matches"),
             (false, Some(reason)) => self.lost(
                 "library-part-lost",
                 t!("library-part-not-loaded"),
@@ -564,6 +570,7 @@ impl LibraryView {
             ),
             (false, None) => {
                 Vacancy::new(i18n::lookup(self.section.vacancy(self.shelf, shape), None))
+                    .spoken("library-vacancy")
                     .icon(self.section.glyph(shape))
             }
         })
@@ -1031,9 +1038,16 @@ impl LibraryView {
         let pin = track.pin();
         let context = track.clone();
         let view = self.me.clone();
+        let total = listing.read(cx).delegate().row_count();
+        let id: ElementId = match &track.id {
+            Some(id) => SharedString::from(format!("library-track-{id}")).into(),
+            None => ("library-track", display).into(),
+        };
 
         Some(
-            Card::new(("library-track", display), SharedString::from(track.name))
+            Card::new(id, SharedString::from(track.name))
+                .aria_position_in_set(display + 1)
+                .aria_size_of_set(total)
                 .tile(card)
                 .cover(track.cover)
                 .when_some(pin, Pinnable::pin)
@@ -1086,15 +1100,19 @@ impl LibraryView {
         cx: &App,
     ) -> Option<AnyElement> {
         let playlist = self.playlists.read(cx).delegate().source().at(row, cx)?;
+        let total = self.playlists.read(cx).delegate().row_count();
         let build = match self.shelf.local() {
             true => cards::imported_playlist_card,
             false => cards::playlist_card,
         };
+        let id = SharedString::from(format!("library-playlist-{}", playlist.id));
 
         Some(
-            build(("library-playlist", display), &playlist, &self.playback, cx)
+            build(id, &playlist, &self.playback, cx)
                 .tile(card)
                 .flat()
+                .aria_position_in_set(display + 1)
+                .aria_size_of_set(total)
                 .into_any_element(),
         )
     }
@@ -1107,11 +1125,15 @@ impl LibraryView {
         cx: &App,
     ) -> Option<AnyElement> {
         let artist = self.artists.read(cx).delegate().source().at(row, cx)?;
+        let total = self.artists.read(cx).delegate().row_count();
+        let id = SharedString::from(format!("library-artist-{}", artist.id));
 
         Some(
-            cards::artist_card(("library-artist", display), &artist, &self.playback, cx)
+            cards::artist_card(id, &artist, &self.playback, cx)
                 .tile(card)
                 .flat()
+                .aria_position_in_set(display + 1)
+                .aria_size_of_set(total)
                 .into_any_element(),
         )
     }
@@ -1143,9 +1165,12 @@ impl Render for LibraryView {
                     .source()
                     .menu()
                     .for_track(&track, cx),
-                LibraryMenu::Background => new_playlist_menu(cx.listener(|this, _, window, cx| {
-                    this.create_playlist(window, cx);
-                })),
+                LibraryMenu::Background => new_playlist_menu(
+                    self.shelf,
+                    cx.listener(|this, _, window, cx| {
+                        this.create_playlist(window, cx);
+                    }),
+                ),
             };
             Popup::new(position, menu).on_close(cx.listener(|this, _, _, cx| {
                 this.context_menu = None;
@@ -1274,8 +1299,19 @@ impl Tooled for LibraryView {
                 .into_any_element()
         });
 
+        let import = (self.section == Section::Playlists && self.shelf.local()).then(|| {
+            Button::new("import-playlist")
+                .icon("icons/file-music.svg")
+                .tooltip("menu-import-playlist")
+                .small()
+                .ghost()
+                .on_click(|_, _, cx| local::import_playlist(cx))
+                .into_any_element()
+        });
+
         let mut tools = Vec::new();
         tools.extend(create);
+        tools.extend(import);
         let switchable = !self.section.listing();
         tools.extend(switchable.then(|| {
             tools::views(&self.popovers, self.mode(), move |mode, cx| {
@@ -1372,6 +1408,7 @@ fn head(display: usize, label: SharedString, cx: &App) -> AnyElement {
     heading(label.clone(), cx)
         .id(("library-group", display))
         .role(Role::Heading)
+        .aria_level(2)
         .aria_label(label)
         .w_full()
         .pt_2()

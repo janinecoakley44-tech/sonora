@@ -240,6 +240,8 @@ fn offset_to_utf16(text: &str, offset: usize) -> usize {
 pub struct Input {
     focus_handle: FocusHandle,
     hint: SharedString,
+    /// The Fluent key of what a screen reader calls the field, when that differs from its hint.
+    name: Option<SharedString>,
     icon: Option<SharedString>,
     compact: bool,
     tucked: bool,
@@ -268,6 +270,7 @@ impl Input {
         Self {
             focus_handle: cx.focus_handle(),
             hint: hint.into(),
+            name: None,
             icon: None,
             compact: false,
             tucked: false,
@@ -320,6 +323,13 @@ impl Input {
 
     pub fn masked(mut self) -> Self {
         self.masked = true;
+        self
+    }
+
+    /// Names the field for screen readers with the Fluent message `key`, for a field whose hint is
+    /// an example rather than what it asks for. The hint is then read as the placeholder.
+    pub fn name(mut self, key: impl Into<SharedString>) -> Self {
+        self.name = Some(key.into());
         self
     }
 

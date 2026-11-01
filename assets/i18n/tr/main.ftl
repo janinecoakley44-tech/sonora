@@ -100,6 +100,7 @@ column-tracks = Parçalar
 menu-add-to-playlist = Çalma listesine ekle
 menu-add-tracks-to-playlist = { $count } parçayı çalma listesine ekle
 menu-new-playlist = Yeni çalma listesi
+menu-import-playlist = Çalma listesini içe aktar…
 menu-edit-tags = Etiketleri düzenle
 menu-no-playlists = Çalma listesi yok
 menu-search-playlists = Çalma listesi ara
@@ -130,8 +131,11 @@ menu-play-last = En son çal
 menu-play-tracks-last = { $count ->
    *[other] { $count } parçayı en son çal
 }
-menu-song-radio = Şarkı radyosuna git
-menu-go-to-album = Albüme git
+menu-go-to = Git
+menu-artist = Sanatçı
+menu-album = Albüm
+menu-radio = Radyo
+menu-details = Ayrıntılar
 menu-go-to-artist = Sanatçıya git
 menu-view-details = Ayrıntıları gör
 menu-copy-link = Bağlantıyı kopyala
@@ -140,8 +144,9 @@ menu-copy = Kopyala
 menu-paste = Yapıştır
 menu-select-all = Tümünü seç
 menu-remove-from-queue = Sıradan çıkar
-menu-rename-playlist = Çalma listesini yeniden adlandır
+menu-edit-playlist = Çalma listesini düzenle
 menu-delete-playlist = Çalma listesini sil
+menu-export-playlist = Çalma listesini dışa aktar…
 menu-add-playlist-to-library = Kitaplığa ekle
 menu-remove-playlist-from-library = Kitaplıktan çıkar
 menu-library-add = Kitaplığa ekle
@@ -159,7 +164,12 @@ menu-play-artist = Sanatçıyı çal
 # playlist editor
 playlist-name-placeholder = Çalma listesi adı
 playlist-create-title = Çalma listesi oluştur
-playlist-rename-title = Çalma listesini yeniden adlandır
+playlist-edit-title = Çalma listesini düzenle
+playlist-cover-choose = Resim seç
+playlist-cover-remove = Kapağı kaldır
+playlist-cover-unopenable = Sonora bu dosyayı açamıyor
+playlist-cover-too-large = Bu resim 40 MB’tan büyük
+playlist-cover-not-a-picture = Bu dosya JPEG, PNG veya WebP resmi değil
 playlist-delete-title = Çalma listesini sil
 playlist-delete-confirm = “{ $name }” silinsin mi? Bu işlem geri alınamaz.
 playlist-again-title = Yeniden eklensin mi?
@@ -403,6 +413,7 @@ release-meta = { $year } • { $kind }
 home-quick-picks = Hızlı seçimler
 home-quick-picks-empty = Birkaç şarkı beğen, burada görünsünler
 home-recently-added = Son eklenenler
+home-recently-played = Son çalınanlar
 home-playlists = Çalma listeleri
 home-favorite-albums = Favori albümler
 home-artists = Sanatçılar
@@ -411,6 +422,9 @@ home-collection-albums = Koleksiyonundaki albümler
 # search page
 search-placeholder = Ne dinlemek istersin?
 search-browse = Tümüne göz at
+search-submit = Ara
+search-recent = Son aramalar
+search-forget = Geçmişten kaldır
 genre-empty = Burada henüz gösterilecek bir şey yok
 search-best-match = En iyi eşleşme
 search-no-matches = Eşleşme yok
@@ -949,7 +963,6 @@ settings-romanized-lyrics = Latin harfli şarkı sözleri
 settings-romanized-lyrics-detail = Seçilen yazı sistemleri için yerel olarak üretilen okunuşu göster
 settings-romanization-writing-systems = Yazı sistemleri
 settings-lyrics-priority = Servis önceliği
-settings-lyrics-priority-detail = Aynı türdeki şarkı sözleri arasında Sonora daha üstteki kaynağı gösterir
 settings-lyrics-providers-detail = Şarkı sözü aranacak servisleri seç
 settings-lyrics-providers-selected = { $count ->
    *[other] { $count } seçili
@@ -1049,6 +1062,9 @@ saver-fps = { $fps } FPS
 
 toast-playlist-created = Çalma listesi oluşturuldu
 toast-playlist-renamed = Çalma listesi yeniden adlandırıldı
+toast-playlist-updated = Çalma listesi güncellendi
+toast-playlist-cover-changed = Çalma listesinin kapağı değişti
+toast-playlist-cover-removed = Çalma listesinin kapağı kaldırıldı
 toast-playlist-deleted = Çalma listesi silindi
 toast-local-delete-failed = Bazı parça dosyaları silinemedi
 toast-playlist-added = Çalma listesi kitaplığına eklendi
@@ -1060,6 +1076,14 @@ toast-track-removed-unnamed = Çalma listesinden çıkarıldı
 toast-playlist-failed = Bu değişiklik kaydedilemedi
 toast-playlist-busy = Başka bir değişiklik hâlâ sürüyor
 toast-playlist-signed-out = Çalma listelerini değiştirmek için oturum aç
+toast-playlist-imported = { $name } içe aktarıldı
+toast-playlist-imported-partly = { $name } içe aktarıldı, kitaplığında olmayan { $count ->
+        [one] bir şarkı
+       *[other] { $count } şarkı
+    } dışarıda bırakıldı
+toast-playlist-import-empty = { $name } içindeki şarkıların hiçbiri kitaplığında yok
+toast-playlist-exported = Çalma listesi dışa aktarıldı
+toast-file-dialog-failed = Dosya penceresi açılamadı
 toast-queued-track = { $name } sıraya eklendi
 toast-next-track = Sırada { $name } çalacak
 toast-last-track = { $name } en son çalacak

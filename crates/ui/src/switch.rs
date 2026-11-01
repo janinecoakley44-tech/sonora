@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, Div, ElementId, Interactivity, Stateful, StyleRefinement, Window, div, px,
+    App, ClickEvent, Div, ElementId, Interactivity, SharedString, Stateful, StyleRefinement,
+    Window, div, px,
 };
 
 use crate::motion::{Motion, Motioned as _, Movement};
@@ -19,6 +20,7 @@ pub struct Switch {
     base: Stateful<Div>,
     checked: bool,
     disabled: bool,
+    name: Option<SharedString>,
     on_click: Option<Click>,
 }
 
@@ -32,8 +34,16 @@ impl Switch {
             id,
             checked,
             disabled: false,
+            name: None,
             on_click: None,
         }
+    }
+
+    /// Names the switch for screen readers. It draws no text of its own, so a switch without a
+    /// name is announced as nothing but its state.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
@@ -69,6 +79,7 @@ impl RenderOnce for Switch {
             mut base,
             checked,
             disabled,
+            name,
             on_click,
         } = self;
         let theme = *cx.theme();
@@ -113,6 +124,7 @@ impl RenderOnce for Switch {
             // this node during prepaint.
             .role(gpui::accesskit::Role::Switch)
             .aria_toggled(gpui::accesskit::Toggled::from(checked))
+            .when_some(name, |this, name| this.aria_label(name))
             .flex()
             .flex_none()
             .items_center()

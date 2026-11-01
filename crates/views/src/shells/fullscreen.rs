@@ -99,6 +99,7 @@ pub struct FullscreenView {
     volume_held: bool,
     muted: Option<f32>,
     large: Option<SharedString>,
+    full: Option<SharedString>,
     revision: usize,
     track_menu: ItemMenu,
     context_menu: Option<(music::Track, Point<Pixels>)>,
@@ -154,6 +155,7 @@ impl FullscreenView {
             volume_held: false,
             muted: None,
             large: None,
+            full: None,
             revision: 0,
             track_menu: ItemMenu::new(playlist_scrollbar, cx),
             context_menu: None,
@@ -390,28 +392,35 @@ impl FullscreenView {
         let radius = cx.theme().radius * 2.;
         let pad = px(COVER_LAYER_PAD);
         let inset = (layout_side - raster_side) / 2. - pad;
-        let (album, small, local_id) = match self.playback.read(cx).shown_track(cx) {
+        let (album, small, local_id, named) = match self.playback.read(cx).shown_track(cx) {
             Some(track) => {
                 let local = track.id.as_deref().is_some_and(music::is_local_id);
-                (track.album_id, track.cover, local)
+                let named = album_name(&track);
+                (track.album_id, track.cover, local, named)
             }
-            None => (None, None, false),
+            None => (None, None, false, SharedString::default()),
         };
-        let cover_large = album
-            .as_deref()
-            .and_then(|album| self.cover.read(cx).large_for(album));
+        let cover = self.cover.read(cx);
+        let cover_large = album.as_deref().and_then(|album| cover.large_for(album));
+        let cover_full = album.as_deref().and_then(|album| cover.full_for(album));
         let local = local_id || small.as_ref().is_some_and(|url| url.starts_with("file://"));
         // Only upgrade resolution for non-local tracks, since a local cover is always
         // the full resolution picture. The track's own embedded cover is prioritized
-        // over the cover of its album.
-        let large =
-            cover_large.filter(|url| !local && small.is_some() && Some(*url) != small.as_deref());
+        // over the cover of its album. Each larger cover fades in over the one below, so the
+        // thumbnail shows only until the large cover lands.
+        let upgrades = |url: &&str| !local && small.is_some() && Some(*url) != small.as_deref();
+        let large = cover_large.filter(upgrades);
+        let full = cover_full
+            .filter(upgrades)
+            .filter(|url| Some(*url) != large);
 
-        if self.large.as_deref() != large {
+        if self.large.as_deref() != large || self.full.as_deref() != full {
             self.large = large.map(SharedString::from);
+            self.full = full.map(SharedString::from);
             self.revision += 1;
         }
         let large = self.large.clone();
+        let full = self.full.clone();
         let revision = self.revision;
         let waiting = !local && album.is_some() && cover_large.is_none();
 
@@ -421,7 +430,9 @@ impl FullscreenView {
             .size(layout_side)
             .flex_none()
             .when_some(album, |this, album| {
-                this.cursor_pointer()
+                this.role(Role::Link)
+                    .aria_label(named)
+                    .cursor_pointer()
                     .on_click(move |_, _, cx| open_album(&album, cx))
             })
             .child(
@@ -439,23 +450,28 @@ impl FullscreenView {
                                 .soft(waiting),
                         ),
                     )
-                    .when_some(large, |this, url| {
-                        this.child(
-                            div()
-                                .absolute()
-                                .top(pad)
-                                .left(pad)
-                                .child(
-                                    Artwork::new(Some(url))
-                                        .size(raster_side)
-                                        .corner_radius(radius)
-                                        .overlay(),
+                    .children(
+                        [("cover-large", large), ("cover-full", full)]
+                            .into_iter()
+                            .filter_map(|(layer, url)| {
+                                let url = url?;
+                                Some(
+                                    div()
+                                        .absolute()
+                                        .top(pad)
+                                        .left(pad)
+                                        .child(
+                                            Artwork::new(Some(url))
+                                                .size(raster_side)
+                                                .corner_radius(radius)
+                                                .overlay(),
+                                        )
+                                        .motion((layer, revision), Motion::Slow, |art, t| {
+                                            art.opacity(t)
+                                        }),
                                 )
-                                .motion(("cover-large", revision), Motion::Slow, |art, t| {
-                                    art.opacity(t)
-                                }),
-                        )
-                    }),
+                            }),
+                    ),
             )
     }
 
@@ -480,6 +496,7 @@ impl FullscreenView {
             None => t!("player-nothing-playing"),
         };
         let album = track.and_then(|track| track.album_id.clone());
+        let opens = album.is_some();
         let explicit = track.is_some_and(|track| track.explicit);
         let meta_bounds = self.meta_bounds.clone();
         // Both lines carry a shadow in the page colour, so they stay legible where a visualizer
@@ -494,7 +511,7 @@ impl FullscreenView {
                 .items_center()
                 .gap_2()
                 .when(explicit, |this| {
-                    this.child(div().flex_none().child(ExplicitBadge::new()))
+                    this.child(explicit_badge("fullscreen-explicit", track.is_some()))
                 })
                 .child(
                     div()
@@ -545,6 +562,10 @@ impl FullscreenView {
                     .child(
                         div()
                             .id("fullscreen-title")
+                            .map(|this| match opens {
+                                true => this.role(Role::Link).aria_label(title.clone()),
+                                false => this.role(Role::Label).aria_value(title.clone()),
+                            })
                             .min_w_0()
                             .whitespace_nowrap()
                             .text_ellipsis()
@@ -605,6 +626,8 @@ impl FullscreenView {
             None => t!("player-nothing-playing"),
         };
         let album = track.and_then(|track| track.album_id.clone());
+        let opens = album.is_some();
+        let named = track.map(album_name).unwrap_or_default();
         let explicit = track.is_some_and(|track| track.explicit);
 
         div()
@@ -617,7 +640,9 @@ impl FullscreenView {
                 div()
                     .id("strip-artwork")
                     .when_some(album.clone(), |this, album| {
-                        this.cursor_pointer()
+                        this.role(Role::Link)
+                            .aria_label(named)
+                            .cursor_pointer()
                             .on_click(move |_, _, cx| open_album(&album, cx))
                     })
                     .child(Artwork::new(track.and_then(|t| t.cover.clone())).size(cover)),
@@ -638,6 +663,10 @@ impl FullscreenView {
                             .child(
                                 div()
                                     .id("strip-title")
+                                    .map(|this| match opens {
+                                        true => this.role(Role::Link).aria_label(title.clone()),
+                                        false => this.role(Role::Label).aria_value(title.clone()),
+                                    })
                                     .min_w_0()
                                     .truncate()
                                     .tails()
@@ -665,7 +694,7 @@ impl FullscreenView {
                                     .child(title),
                             )
                             .when(explicit, |this| {
-                                this.child(div().flex_none().child(ExplicitBadge::new()))
+                                this.child(explicit_badge("strip-explicit", true))
                             })
                             .child(div().flex().flex_none().opacity(1. - hide).child(
                                 like(track, &self.playback, cx).when(frosted, Button::frosted),
@@ -712,9 +741,8 @@ impl FullscreenView {
             .or(self.pending)
             .map(|at| (at, clock(total.mul_f32(at))));
 
-        let label = move |value: Duration, align_end: bool| {
-            div()
-                .child(clock(value))
+        let label = move |id: &'static str, value: Duration, align_end: bool| {
+            ui::spoken(id, clock(value))
                 .w(width)
                 .flex_none()
                 .whitespace_nowrap()
@@ -724,14 +752,19 @@ impl FullscreenView {
         };
 
         div()
+            .id("fullscreen-seek")
+            .role(Role::Group)
+            .aria_label(t!("song-position"))
             .flex()
             .items_center()
             .gap_2()
             .w_full()
-            .child(label(elapsed, true))
+            .child(label("fullscreen-elapsed", elapsed, true))
             .child(
                 div().flex_1().min_w_0().child(
                     Scrubber::new(&self.seek, progress)
+                        .name(t!("song-position"))
+                        .value(clock(elapsed))
                         .colors(theme.progress_bar, empty, theme.foreground)
                         .enabled(seekable)
                         .when_some(bubble, |this, (at, text)| this.bubble(at, text))
@@ -744,7 +777,7 @@ impl FullscreenView {
                         ),
                 ),
             )
-            .child(label(total, false))
+            .child(label("fullscreen-total", total, false))
     }
 
     /// The pill, the seek bar and the transport row. Below `Room::Roomy` the row spans the
@@ -857,6 +890,7 @@ impl FullscreenView {
             .on_hover(linger)
             .child(
                 TabBar::new("fullscreen-pill-bar")
+                    .name(t!("fullscreen-panels"))
                     .when(frosted, TabBar::blurred)
                     .rounded(theme.radius + gap)
                     .items([
@@ -960,6 +994,8 @@ impl FullscreenView {
                                 false => div().bg(theme.popover),
                             }
                             .id("fullscreen-volume-panel")
+                            .role(Role::Group)
+                            .aria_label(t!("equalizer-status-volume"))
                             .occlude()
                             .flex()
                             .justify_center()
@@ -977,6 +1013,8 @@ impl FullscreenView {
                                 div().h(px(VOLUME_RISE)).flex().child(
                                     Scrubber::new(&self.volume, level)
                                         .vertical()
+                                        .name(t!("equalizer-status-volume"))
+                                        .value(percent(level))
                                         .colors(theme.progress_bar, empty, theme.foreground)
                                         .when_some(bubble, |this, (at, text)| this.bubble(at, text))
                                         .on_move(cx.listener(|this, fraction: &f32, _, cx| {
@@ -984,12 +1022,16 @@ impl FullscreenView {
                                             this.volume_held = true;
                                             this.muted = None;
                                             this.playback.update(cx, |playback, cx| {
-                                                playback.set_volume(level, cx)
+                                                playback.slide_volume(level, cx)
                                             });
+                                            cx.notify();
                                         }))
                                         .on_release(cx.listener(
                                             |this, _: &MouseUpEvent, _, cx| {
                                                 this.volume_held = false;
+                                                this.playback.update(cx, |playback, cx| {
+                                                    playback.end_volume_slide(cx)
+                                                });
                                                 cx.notify();
                                             },
                                         )),
@@ -1070,6 +1112,29 @@ impl FullscreenView {
 
 fn open_album(album: &str, cx: &mut App) {
     navigate(Destination::Album(album.into()), cx);
+}
+
+/// What a cover that opens the track's album is called: the album's name, or View album when
+/// the track does not name one.
+fn album_name(track: &music::Track) -> SharedString {
+    match track.album.is_empty() {
+        true => t!("song-view-album"),
+        false => SharedString::from(track.album.clone()),
+    }
+}
+
+/// The explicit mark beside a title. `named` puts it in the accessibility tree, so the invisible
+/// copy that only balances the title row can stay out of it.
+fn explicit_badge(id: &'static str, named: bool) -> impl IntoElement {
+    let badge = div().flex_none().child(ExplicitBadge::new());
+    match named {
+        true => badge
+            .id(id)
+            .role(Role::Image)
+            .aria_label(t!("song-explicit"))
+            .into_any_element(),
+        false => badge.into_any_element(),
+    }
 }
 
 impl Shell for FullscreenView {
@@ -1192,6 +1257,7 @@ impl Render for FullscreenView {
         div()
             .id("fullscreen")
             .role(Role::Main)
+            .aria_label(t!("player-fullscreen"))
             .key_context(super::shell_context(WORKSPACE_CONTEXT))
             .track_focus(&self.focus)
             .relative()

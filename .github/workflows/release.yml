@@ -411,6 +411,10 @@ jobs:
             --desktop-file desktop/sonora.desktop \
             --icon-file assets/linux/sonora.svg
 
+          # appimagetool makes the image's own icon only from a PNG or XPM in the top level of the
+          # AppDir, and linuxdeploy puts the SVG there.
+          cp assets/linux/icons/hicolor/256x256/apps/sonora.png AppDir/sonora.png
+
           # The Vulkan loader has to be the host's: it is what finds the host's ICD, and a loader
           # this old paired with a current driver is how an AppImage stops starting.
           rm -f AppDir/usr/lib/libvulkan.so.1*
@@ -754,3 +758,94 @@ jobs:
     secrets: inherit
     with:
       tag: ${{ github.ref_name }}
+
+  # The nightly built before a release still carries the previous version number.
+  # Building the nightly again right away keeps nightly users from running behind the release.
+  refresh-nightly:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: dispatch the nightly
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run nightly.yml --repo "$GITHUB_REPOSITORY" --ref main
+
+  # sonora-bin is rendered from aur/sonora-bin/PKGBUILD on every stable release, so the AUR
+  # repository only ever holds what this job pushed. It needs AUR_SSH_KEY, the key nightly.yml
+  # pushes sonora-nightly-bin with, since one AUR account maintains both.
+  aur:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: system dependencies
+        run: pacman -Syu --noconfirm --needed git openssh
+
+      - uses: actions/checkout@v5
+
+      - name: render and build the PKGBUILD
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          curl -fsSL "$base/releases/download/$TAG/SHA256SUMS" > sums
+          sum() { awk -v file="$1" '$2 == file { print $1 }' sums; }
+          source="$(curl -fsSL "$base/archive/refs/tags/$TAG.tar.gz" | sha256sum | cut -d ' ' -f 1)"
+          x86_64="$(sum "sonora-$TAG-x86_64-unknown-linux-gnu")"
+          aarch64="$(sum "sonora-$TAG-aarch64-unknown-linux-gnu")"
+          test -n "$x86_64"
+          test -n "$aarch64"
+
+          mkdir package
+          sed \
+            -e "s/@PKGVER@/${TAG#v}/" \
+            -e "s/@SHA256_SOURCE@/$source/" \
+            -e "s/@SHA256_X86_64@/$x86_64/" \
+            -e "s/@SHA256_AARCH64@/$aarch64/" \
+            aur/sonora-bin/PKGBUILD > package/PKGBUILD
+          if grep -n '@[A-Z0-9_]*@' package/PKGBUILD; then exit 1; fi
+
+          # A package build downloads every source and checks it against its sum, so a PKGBUILD
+          # that would fail for users never reaches the AUR. makepkg refuses to run as root, and
+          # -d skips installing the runtime dependencies the build itself does not need.
+          useradd -m builder
+          chown -R builder package
+          su builder -c 'cd package && makepkg -f -d --noconfirm && makepkg --printsrcinfo > .SRCINFO'
+          cat package/.SRCINFO
+
+      - name: push to the AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # The AUR's published ed25519 host key. ssh reads its known_hosts from the passwd home,
+          # which in a job container is not $HOME, so the file is named explicitly.
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" \
+            > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+
+          git clone -q ssh://aur@aur.archlinux.org/sonora-bin.git aur-repo
+          cp package/PKGBUILD package/.SRCINFO aur-repo/
+          cd aur-repo
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "::notice::the AUR package is already at ${TAG#v}"
+            exit 0
+          fi
+          git \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "upgpkg: sonora-bin ${TAG#v}-1"
+          git push origin HEAD:master

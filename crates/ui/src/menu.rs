@@ -42,7 +42,7 @@ const PANEL_SLACK: Pixels = px(6.);
 const HOLD_REACH: f64 = 8.;
 const SAFE_X: Pixels = px(6.);
 const SAFE_Y: Pixels = px(12.);
-const NEAR: usize = Near::Bar as usize + 1;
+const NEAR: usize = Near::InnerBar as usize + 1;
 
 type Close = Rc<dyn Fn(&(), &mut Window, &mut App) + 'static>;
 type Action = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -72,12 +72,29 @@ impl Trigger {
     }
 }
 
+/// Where the pointer can be that keeps a submenu open. The `Inner` places are the gap, panel
+/// and scrollbar of a submenu opened from inside this one.
 #[derive(Clone, Copy)]
 enum Near {
     Item,
     Gap,
     Panel,
     Bar,
+    InnerGap,
+    InnerPanel,
+    InnerBar,
+}
+
+impl Near {
+    /// The place this one counts as for the submenus enclosing it.
+    fn inward(self) -> Self {
+        match self {
+            Self::Gap => Self::InnerGap,
+            Self::Panel => Self::InnerPanel,
+            Self::Bar => Self::InnerBar,
+            inner => inner,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -159,6 +176,22 @@ impl SubmenuState {
             });
         })
         .detach();
+    }
+
+    /// Records the pointer at `place` of this submenu, and at the matching inner place of each
+    /// submenu in `outer` that it opened from, so those stay open while the pointer is here.
+    fn reach(
+        &self,
+        outer: &[SubmenuState],
+        place: Near,
+        hovered: bool,
+        window: AnyWindowHandle,
+        cx: &mut App,
+    ) {
+        self.near(place, hovered, window, cx);
+        for state in outer {
+            state.near(place.inward(), hovered, window, cx);
+        }
     }
 
     fn measure_panel(&self, bounds: Bounds<Pixels>) {
@@ -517,6 +550,8 @@ impl MenuItem {
 pub struct Menu {
     base: Stateful<Div>,
     items: Vec<MenuItem>,
+    /// What a screen reader calls the menu, read as focus enters it.
+    name: Option<SharedString>,
     dismiss: Option<Close>,
     action: Option<Action>,
     priority: usize,
@@ -525,6 +560,8 @@ pub struct Menu {
     header: Option<AnyElement>,
     search: Option<MenuSearch>,
     hover_guard: Option<SubmenuState>,
+    /// The states of the submenus this submenu sits inside, outermost first.
+    outer: Vec<SubmenuState>,
     trigger: Option<Trigger>,
     pressed: Option<Point<Pixels>>,
     above: bool,
@@ -536,6 +573,7 @@ impl Menu {
         Self {
             base: div().id(id),
             items: Vec::new(),
+            name: None,
             dismiss: None,
             action: None,
             priority: 1,
@@ -544,6 +582,7 @@ impl Menu {
             header: None,
             search: None,
             hover_guard: None,
+            outer: Vec::new(),
             trigger: None,
             pressed: None,
             above: false,
@@ -557,6 +596,12 @@ impl Menu {
 
     pub fn items(mut self, items: impl IntoIterator<Item = MenuItem>) -> Self {
         self.items.extend(items);
+        self
+    }
+
+    /// Names the menu for screen readers, usually after the button or setting that opens it.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
         self
     }
 
@@ -655,6 +700,7 @@ impl RenderOnce for Menu {
         let Self {
             mut base,
             items,
+            name,
             dismiss,
             action,
             priority,
@@ -663,6 +709,7 @@ impl RenderOnce for Menu {
             header,
             search,
             hover_guard,
+            outer,
             trigger,
             pressed,
             above,
@@ -707,9 +754,10 @@ impl RenderOnce for Menu {
         let picked = cursor.and_then(|place| items[place].press.clone());
 
         if let (Some(scrollbar), Some(guard)) = (scrollbar.as_ref(), hover_guard.clone()) {
+            let outer = outer.clone();
             scrollbar.update(cx, |scrollbar, _| {
                 scrollbar.set_hover_guard(move |hovered, window, cx| {
-                    guard.near(Near::Bar, hovered, window, cx)
+                    guard.reach(&outer, Near::Bar, hovered, window, cx)
                 });
             });
         }
@@ -718,11 +766,13 @@ impl RenderOnce for Menu {
         let overrides = std::mem::take(base.style());
         let panel = Trigger::default();
         let nested = hover_guard.is_some();
-        let dismiss_guards: Vec<_> = items
+        let inner_outer: Vec<SubmenuState> =
+            outer.iter().cloned().chain(hover_guard.clone()).collect();
+        let dismiss_guards = submenu_states(&items);
+        let bounds_guards: Vec<_> = items
             .iter()
             .filter_map(|item| item.submenu.as_ref().map(|submenu| submenu.state.clone()))
             .collect();
-        let bounds_guards = dismiss_guards.clone();
         let viewport_width = window.viewport_size().width;
         let tucked = crate::metrics::tucked(theme.radius, window);
 
@@ -735,6 +785,19 @@ impl RenderOnce for Menu {
             scrollbar: scrollbar.clone(),
         });
         let row_searches = searches.clone();
+        // Separators and custom content are not choices, so a screen reader counts only the
+        // items around them when it says how far down the menu it is.
+        let mut choices = 0;
+        let positions: Vec<Option<usize>> = items
+            .iter()
+            .map(|item| match item.separator || item.content.is_some() {
+                true => None,
+                false => {
+                    choices += 1;
+                    Some(choices)
+                }
+            })
+            .collect();
         let rows = items.into_iter().enumerate().map(move |(place, item)| {
             let MenuItem {
                 id,
@@ -796,6 +859,10 @@ impl RenderOnce for Menu {
                 .rounded(tucked)
                 .role(gpui::accesskit::Role::MenuItem)
                 .aria_label(label.clone())
+                .when_some(positions[place], |this, position| {
+                    this.aria_position_in_set(position)
+                        .aria_size_of_set(choices)
+                })
                 .when(selected, |this| this.aria_selected(true))
                 .when(checked, |this| {
                     this.aria_toggled(gpui::accesskit::Toggled::True)
@@ -916,6 +983,9 @@ impl RenderOnce for Menu {
                     if submenu.menu.pressed.is_none() {
                         submenu.menu.pressed = pressed;
                     }
+                    submenu.menu.priority = submenu.menu.priority.max(priority + 1);
+                    submenu.menu.outer = inner_outer.clone();
+                    let gap_outer = inner_outer.clone();
                     let gap_state = submenu.state.clone();
                     let reach_state = submenu.state.clone();
                     match submenu.state.is_open() {
@@ -951,7 +1021,8 @@ impl RenderOnce for Menu {
                                                 .when(flip_left, |this| this.pl_3().pr_1())
                                                 .when(!flip_left, |this| this.pl_1().pr_3())
                                                 .on_hover(move |hovered, window, cx| {
-                                                    gap_state.near(
+                                                    gap_state.reach(
+                                                        &gap_outer,
                                                         Near::Gap,
                                                         *hovered,
                                                         window.window_handle(),
@@ -1083,6 +1154,7 @@ impl RenderOnce for Menu {
             })
             .id("menu-panel")
             .role(gpui::accesskit::Role::Menu)
+            .when_some(name, |this, name| this.aria_label(name))
             .flex()
             .flex_col()
             .p_1()
@@ -1099,7 +1171,7 @@ impl RenderOnce for Menu {
             .when_some(ceiling, |this, ceiling| this.max_h(ceiling))
             .when_some(hover_guard, |this, guard| {
                 this.on_hover(move |hovered, window, cx| {
-                    guard.near(Near::Panel, *hovered, window.window_handle(), cx)
+                    guard.reach(&outer, Near::Panel, *hovered, window.window_handle(), cx)
                 })
             })
             .occlude()
@@ -1213,6 +1285,18 @@ fn flips(menu: Bounds<Pixels>, width: Pixels, viewport_width: Pixels) -> bool {
         (false, true) => true,
         (false, false) => left > right,
     }
+}
+
+/// The states of every submenu reachable from `items`, nested ones included, so a click in any
+/// of their panels does not count as a click outside the menu.
+fn submenu_states(items: &[MenuItem]) -> Vec<SubmenuState> {
+    items
+        .iter()
+        .filter_map(|item| item.submenu.as_ref())
+        .flat_map(|submenu| {
+            std::iter::once(submenu.state.clone()).chain(submenu_states(&submenu.menu.items))
+        })
+        .collect()
 }
 
 fn grown(bounds: Bounds<Pixels>, x: Pixels, y: Pixels) -> Bounds<Pixels> {

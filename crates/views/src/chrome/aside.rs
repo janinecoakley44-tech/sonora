@@ -5,7 +5,7 @@ use std::{collections::HashMap, ops::Range};
 
 use gpui::prelude::*;
 
-use gpui::accesskit::Role;
+use gpui::accesskit::{Role, Toggled};
 use gpui::{
     Animation, AnimationExt as _, App, Bounds, Context, Div, DragMoveEvent, Entity, FontWeight,
     MouseDownEvent, MouseUpEvent, Pixels, Point, Render, ScrollHandle, ScrollStrategy,
@@ -648,7 +648,7 @@ impl Aside {
         position: QueuePosition,
         queue_revision: u64,
         look: RowLook,
-        total: usize,
+        (place, total): (usize, usize),
         cx: &Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let RowLook {
@@ -674,11 +674,31 @@ impl Aside {
         };
         let pin = track.pin();
         let menu_track = track.clone();
+        // A queue entry keeps its uid while it moves, so its nodes stay put for screen readers.
+        let key = match (uid.as_deref(), position) {
+            (Some(uid), QueuePosition::Past(_)) => format!("past-{uid}"),
+            (Some(uid), QueuePosition::Current) => format!("now-{uid}"),
+            (Some(uid), QueuePosition::Upcoming(_)) => format!("next-{uid}"),
+            (None, _) => index.to_string(),
+        };
+        let added = track
+            .added_by
+            .as_deref()
+            .filter(|added| queued && !added.name.is_empty() && added.name != added.id);
+        let about = match added {
+            Some(added) => SharedString::from(format!(
+                "{}, {}",
+                track.artists,
+                t!("queue-added-by", name = added.name.as_str())
+            )),
+            None => SharedString::from(track.artists.clone()),
+        };
 
         let card = Card::new(
-            ("queue-track", index),
+            SharedString::from(format!("queue-track-{key}")),
             SharedString::from(track.name.clone()),
         )
+        .aria_description(about)
         .cover(track.cover.clone())
         .bare_meta(
             div()
@@ -688,7 +708,7 @@ impl Aside {
                 .min_w_0()
                 .child(
                     crate::shared::cells::artist_links(
-                        SharedString::from(format!("queue-track-artist-{index}")),
+                        SharedString::from(format!("queue-track-artist-{key}")),
                         track.artist_refs.clone(),
                         track.artists.clone(),
                         theme.muted_foreground,
@@ -696,13 +716,7 @@ impl Aside {
                     .text_size(theme.text(Text::Small))
                     .truncate(),
                 )
-                .when_some(
-                    track
-                        .added_by
-                        .as_deref()
-                        .filter(|added| queued && !added.name.is_empty() && added.name != added.id),
-                    |this, added| this.child(adder(added, theme)),
-                ),
+                .when_some(added, |this, added| this.child(adder(added, theme))),
         )
         .tint(title)
         .when(track.explicit, Card::explicit)
@@ -738,7 +752,7 @@ impl Aside {
         })
         .when(queue_index.is_some(), |card| {
             card.action(
-                Button::new(("remove-queued-track", index))
+                Button::new(SharedString::from(format!("remove-queued-track-{key}")))
                     .ghost()
                     .small()
                     .mr_1()
@@ -781,9 +795,9 @@ impl Aside {
         });
 
         div()
-            .id(("queue-track-container", index))
+            .id(SharedString::from(format!("queue-track-container-{key}")))
             .role(Role::ListItem)
-            .aria_position_in_set(index + 1)
+            .aria_position_in_set(place)
             .aria_size_of_set(total)
             .relative()
             .min_w_0()
@@ -849,6 +863,7 @@ impl Aside {
                                         .small()
                                         .icon("icons/radio.svg")
                                         .tooltip("queue-radio")
+                                        .aria_toggled(Toggled::from(self.playback.read(cx).radio()))
                                         .tint(match self.playback.read(cx).radio() {
                                             true => theme.primary,
                                             false => theme.muted_foreground,
@@ -1034,7 +1049,11 @@ impl Aside {
         self.showed = shown;
 
         let empty = |key: &'static str, cx: &mut Context<Self>| {
-            vacant(i18n::lookup(key, None), cx)
+            let text = i18n::lookup(key, None);
+            vacant(text.clone(), cx)
+                .id(key)
+                .role(Role::Label)
+                .aria_value(text)
                 .flex_1()
                 .into_any_element()
         };
@@ -1183,6 +1202,11 @@ impl Aside {
                             &theme,
                         )
                         .id(("instrumental", index))
+                        .role(Role::Button)
+                        .aria_label(t!("lyrics-instrumental-break"))
+                        .when(instrumental_line == Some(index), |this| {
+                            this.aria_selected(true)
+                        })
                         .w_full()
                         .max_w(reach)
                         .px_2()
@@ -1415,10 +1439,21 @@ impl Aside {
                     let traded = index
                         .checked_sub(1)
                         .is_some_and(|previous| lines[previous].voice != line.voice);
+                    // the romanization and the backing vocals under a line are read after it
+                    let lanes_spoken = selected_romanization(&line.romanized, romanization_scripts)
+                        .into_iter()
+                        .chain(line.secondary.iter().map(|lane| lane.text.clone()))
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     let verse_line = div()
                         .id(("verse", index))
                         .role(Role::Button)
                         .aria_label(SharedString::from(line.text.clone()))
+                        .when(!lanes_spoken.is_empty(), |this| {
+                            this.aria_description(SharedString::from(lanes_spoken))
+                        })
+                        .when(active, |this| this.aria_selected(true))
                         .aria_position_in_set(index + 1)
                         .aria_size_of_set(lines.len())
                         .w_full()
@@ -1496,6 +1531,9 @@ impl Aside {
                         });
                         vec![
                             div()
+                                .id("plain-lyrics")
+                                .role(Role::Paragraph)
+                                .aria_label(SharedString::from(text.clone()))
                                 .w_full()
                                 .max_w(reach)
                                 .px_2()
@@ -1581,8 +1619,8 @@ impl Aside {
                 .flex_col()
                 .text_size(theme.text(Text::Small))
                 .text_color(theme.muted_foreground)
-                .child(from)
-                .children(by);
+                .child(ui::spoken("lyrics-credit-source", from))
+                .children(by.map(|by| ui::spoken("lyrics-credit-writers", by)));
             body.push(adrift(note, translation, false, window));
         }
         if drifting {
@@ -1862,7 +1900,7 @@ impl Aside {
                                         .text_color(cx.theme().muted_foreground)
                                         .child(BULLET),
                                 )
-                                .child(faint(cx).child(t!("queue-from")))
+                                .child(faint(cx).child(ui::spoken("queue-from", t!("queue-from"))))
                                 .child(source_link(name, place, cx))
                                 .into_any_element(),
                             _ => label.into_any_element(),
@@ -1887,7 +1925,8 @@ impl Aside {
                             queued: sections.kind(position) == Some(state::QueueKind::Queued),
                             remote,
                         };
-                        Self::row(track, index, position, revision, look, sections.len(), cx)
+                        let place = track_place(&sections, position);
+                        Self::row(track, index, position, revision, look, place, cx)
                             .into_any_element()
                     }
                 };
@@ -1964,7 +2003,13 @@ impl Render for Aside {
                         this.child(self.verses(window, cx)).child(self.witness())
                     })
                     .when(self.tab == SideTab::Queue && empty, |this| {
-                        this.child(vacant(t!("queue-empty"), cx).flex_1())
+                        this.child(
+                            vacant(t!("queue-empty"), cx)
+                                .id("queue-empty")
+                                .role(Role::Label)
+                                .aria_value(t!("queue-empty"))
+                                .flex_1(),
+                        )
                     })
                     .when(self.tab == SideTab::Queue && !empty, |this| {
                         this.child(
@@ -2008,6 +2053,18 @@ fn adder(added: &Contributor, theme: ui::Theme) -> Div {
             None => Initials::new(added.name.clone(), face).into_any_element(),
         })
         .child(t!("queue-added-by", name = added.name.as_str()))
+}
+
+/// Where the song at `position` stands among every song the queue lists, counted from one and
+/// leaving out the section headings, and how many songs that is.
+fn track_place(sections: &Sections, position: QueuePosition) -> (usize, usize) {
+    let current = usize::from(sections.current);
+    let before = match position {
+        QueuePosition::Past(at) => at,
+        QueuePosition::Current => sections.past,
+        QueuePosition::Upcoming(at) => sections.past + current + at,
+    };
+    (before + 1, sections.past + current + sections.upcoming)
 }
 
 fn source_link(name: SharedString, to: Destination, cx: &App) -> impl IntoElement {
@@ -3147,6 +3204,7 @@ fn instrumental_row(progress: f32, past: bool, verse: Pixels, theme: &ui::Theme)
 
 fn wordless(key: &'static str, icon: &'static str) -> gpui::AnyElement {
     Vacancy::new(i18n::lookup(key, None))
+        .spoken(key)
         .icon(icon)
         .flex_1()
         .into_any_element()

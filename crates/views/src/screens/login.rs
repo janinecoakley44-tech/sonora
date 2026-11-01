@@ -285,12 +285,17 @@ impl LoginView {
                     .flex_none()
                     .text_color(theme.foreground),
             )
-            .child(
+            .child({
+                let name = SharedString::from(name.to_string());
                 div()
+                    .id("login-provider-name")
+                    .role(Role::Heading)
+                    .aria_level(2)
+                    .aria_label(name.clone())
                     .text_size(theme.text(Text::Large))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(SharedString::from(name.to_string())),
-            )
+                    .child(name)
+            })
             .child(
                 div()
                     .flex()
@@ -331,10 +336,9 @@ impl LoginView {
             .items_center()
             .gap_2()
             .child(
-                div()
+                ui::spoken("login-device-code", t!("login-device-code", url = &url))
                     .text_size(theme.text(Text::Small))
-                    .text_color(theme.muted_foreground)
-                    .child(t!("login-device-code", url = &url)),
+                    .text_color(theme.muted_foreground),
             )
             .child(device_code(code, cx))
     }
@@ -430,6 +434,7 @@ impl Render for LoginView {
             }
             _ => false,
         };
+        let count = providers.len();
         let tabs = providers
             .iter()
             .enumerate()
@@ -439,6 +444,8 @@ impl Render for LoginView {
                     .small()
                     .ghost()
                     .selected(index == self.tab)
+                    .aria_position_in_set(index + 1)
+                    .aria_size_of_set(count)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.acted(cx);
                         this.tab = index;
@@ -514,6 +521,7 @@ impl Render for LoginView {
                         div()
                             .id("login-title")
                             .role(Role::Heading)
+                            .aria_level(1)
                             .aria_label("Sonora")
                             .child("Sonora")
                             .text_size(theme.text(Text::Display))
@@ -543,7 +551,12 @@ impl Render for LoginView {
                 this.child(self.code_prompt(code, url, cx).into_any_element())
             })
             .when_some(url, |this, url| this.child(self.url_prompt(url)))
-            .child(TabBar::new("login-providers").flex_none().items(tabs))
+            .child(
+                TabBar::new("login-providers")
+                    .name(t!("login-providers"))
+                    .flex_none()
+                    .items(tabs),
+            )
             .when_some(column, |this, column| this.child(self.column(column, cx)))
             .when_some(guest, |this, slug| {
                 this.child(
@@ -555,11 +568,10 @@ impl Render for LoginView {
                         .w(COLUMN)
                         .child(self.guest_mode(slug, pending, cx))
                         .child(
-                            div()
+                            ui::spoken("login-guest-detail", t!("login-guest-detail"))
                                 .text_center()
                                 .text_size(theme.text(Text::Small))
-                                .text_color(theme.muted_foreground)
-                                .child(t!("login-guest-detail")),
+                                .text_color(theme.muted_foreground),
                         )
                         .when(asking, |this| this.child(self.consent(cx))),
                 )

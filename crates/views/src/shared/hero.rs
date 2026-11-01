@@ -4,14 +4,14 @@ use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FontWeight, MouseButton, MouseDownEvent, Pixels,
-    SharedString, Window, div, px, relative,
+    SharedString, Stateful, Window, div, px, relative,
 };
 use i18n::t;
 use music::{Album, Track};
 use state::{Origin, Playback};
 use ui::{
     ActiveTheme as _, Artwork, Button, ExplicitBadge, LEADING, Pin, Pinnable as _, Skeleton,
-    TableState, Tails as _, Text, upper,
+    TableState, Tails as _, Text, spoken, upper,
 };
 
 use crate::shared::tracks::{self, TrackSource};
@@ -71,9 +71,17 @@ pub(crate) fn release_date_label(value: &str) -> SharedString {
     t!("date-full", month = &month, day = day, year = parts[0])
 }
 
+/// The line of facts under a hero title, joined by bullets. Its text items reach screen readers
+/// as labels, while an element item has to name itself.
 #[derive(IntoElement, Default)]
 pub(crate) struct HeroMetaStrip {
-    items: Vec<AnyElement>,
+    items: Vec<MetaItem>,
+}
+
+/// One fact on a `HeroMetaStrip`.
+enum MetaItem {
+    Text(SharedString),
+    Element(AnyElement),
 }
 
 impl HeroMetaStrip {
@@ -82,13 +90,12 @@ impl HeroMetaStrip {
     }
 
     pub(crate) fn text(mut self, text: impl Into<SharedString>) -> Self {
-        self.items
-            .push(div().flex_none().child(text.into()).into_any_element());
+        self.items.push(MetaItem::Text(text.into()));
         self
     }
 
     pub(crate) fn item(mut self, item: impl IntoElement) -> Self {
-        self.items.push(item.into_any_element());
+        self.items.push(MetaItem::Element(item.into_any_element()));
         self
     }
 }
@@ -106,6 +113,12 @@ impl RenderOnce for HeroMetaStrip {
             .text_color(theme.muted_foreground);
 
         for (index, item) in self.items.into_iter().enumerate() {
+            let item = match item {
+                MetaItem::Text(text) => spoken(("hero-meta", index), text)
+                    .flex_none()
+                    .into_any_element(),
+                MetaItem::Element(item) => item,
+            };
             strip = strip.child(
                 div()
                     .flex()
@@ -424,16 +437,25 @@ impl RenderOnce for PageHero {
                         .min_w_0()
                         .h(art)
                         .justify_end()
-                        .gap_3()
+                        .gap_2()
                         .line_height(relative(LEADING))
                         .children(self.eyebrow.map(|eyebrow| eyebrow_label(eyebrow, cx)))
                         .child(
-                            Skeleton::new()
-                                .w(TITLE_SKELETON)
-                                .h(theme.text(Text::Display)),
+                            skeleton_line(theme.text(Text::Display)).child(
+                                Skeleton::new()
+                                    .w(TITLE_SKELETON)
+                                    .h(theme.text(Text::Display)),
+                            ),
                         )
-                        .child(Skeleton::new().w(META_SKELETON).h(theme.metrics.pad))
-                        .child(Skeleton::new().w(ACTION_SKELETON).h(theme.metrics.control)),
+                        .child(
+                            skeleton_line(theme.text(Text::Small))
+                                .child(Skeleton::new().w(META_SKELETON).h(theme.metrics.pad)),
+                        )
+                        .child(
+                            div()
+                                .pt_1()
+                                .child(Skeleton::new().w(ACTION_SKELETON).h(theme.metrics.control)),
+                        ),
                 );
         }
 
@@ -483,8 +505,9 @@ impl RenderOnce for PageHero {
                             .font_weight(FontWeight::BOLD)
                             .child(
                                 div()
-                                    .id((self.id, "title"))
+                                    .id((self.id.clone(), "title"))
                                     .role(Role::Heading)
+                                    .aria_level(1)
                                     .aria_label(self.title.clone())
                                     .min_w_0()
                                     .truncate()
@@ -498,7 +521,14 @@ impl RenderOnce for PageHero {
                                     .child(self.title),
                             )
                             .when(self.explicit, |this| {
-                                this.child(div().flex_none().child(ExplicitBadge::new()))
+                                this.child(
+                                    div()
+                                        .id((self.id.clone(), "explicit"))
+                                        .role(Role::Image)
+                                        .aria_label(t!("song-explicit"))
+                                        .flex_none()
+                                        .child(ExplicitBadge::new()),
+                                )
                             }),
                     )
                     .children(self.meta)
@@ -507,12 +537,23 @@ impl RenderOnce for PageHero {
     }
 }
 
-fn eyebrow_label(label: SharedString, cx: &App) -> Div {
+/// The kind of page above the hero title, drawn in capitals. Screen readers get the label as
+/// written, since a reader may spell out text in capitals letter by letter.
+fn eyebrow_label(label: SharedString, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
 
     div()
+        .id("hero-eyebrow")
+        .role(Role::Label)
+        .aria_value(label.clone())
         .text_size(theme.text(Text::Small))
         .text_color(theme.muted_foreground)
         .font_weight(FontWeight::SEMIBOLD)
         .child(upper(label))
+}
+
+/// A row as tall as one line of text at `size`, so the skeleton bar inside it takes the room of
+/// the text it stands in for and the hero keeps its layout once the page loads.
+fn skeleton_line(size: Pixels) -> Div {
+    div().flex().items_center().h(size * LEADING)
 }

@@ -13,8 +13,9 @@ permissions:
   contents: read
 
 jobs:
-  # A scheduled run builds only when main has moved past the commit the current nightly was built
-  # from. A manual run always builds. Either way the build is main, never another branch.
+  # A scheduled run builds only when main has changed beyond flake.nix since the commit the current
+  # nightly was built from. A manual run always builds. Either way the build is main, never another
+  # branch.
   gate:
     if: github.repository == 'sonorahq/sonora' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -40,6 +41,16 @@ jobs:
             echo "::notice::main is still at ${GITHUB_SHA:0:7}, which the current nightly was built from"
             exit 0
           fi
+          # A release rebuilds the nightly and then points the flake at itself in a commit of its
+          # own. flake.nix does not go into the binary, so that commit alone needs no build.
+          if [ "$EVENT" = schedule ] && [ -n "$built" ]; then
+            changed="$(gh api "repos/$GITHUB_REPOSITORY/compare/$built...$GITHUB_SHA" \
+              --jq '[.files[].filename | select(. != "flake.nix")] | length' || echo unknown)"
+            if [ "$changed" = 0 ]; then
+              echo "::notice::main has changed only flake.nix since ${built:0:7}, which the current nightly was built from"
+              exit 0
+            fi
+          fi
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
           {
             echo "number=$version-nightly.$(date -u +%Y%m%d)"
@@ -51,8 +62,11 @@ jobs:
     needs: gate
     if: needs.gate.outputs.number != ''
     uses: ./.github/workflows/release.yml
+    # GitHub refuses to start a reusable workflow when any of its jobs asks for more than the caller
+    # grants. release.yml's refresh-nightly wants actions: write, though it never runs here.
     permissions:
       contents: write
+      actions: write
     with:
       nightly: ${{ needs.gate.outputs.number }}
 

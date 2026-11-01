@@ -41,6 +41,8 @@ pub struct Card {
     base: Stateful<Div>,
     title: SharedString,
     eyebrow: Option<SharedString>,
+    /// What a screen reader reads after the title, standing in for the meta line it cannot reach.
+    description: Option<SharedString>,
     size: Option<Text>,
     weight: Option<FontWeight>,
     meta: Option<AnyElement>,
@@ -76,6 +78,7 @@ impl Card {
             base: div().id(id),
             title: title.into(),
             eyebrow: None,
+            description: None,
             size: None,
             weight: None,
             meta: None,
@@ -193,6 +196,14 @@ impl Card {
         self
     }
 
+    /// What a screen reader reads after the title, such as the artist and year the meta line
+    /// shows. The meta line is an element no reader can reach, and the eyebrow stands in when
+    /// this is not set.
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
     pub fn size(mut self, size: Text) -> Self {
         self.size = Some(size);
         self
@@ -284,6 +295,7 @@ impl RenderOnce for Card {
             mut base,
             title,
             eyebrow,
+            description,
             size,
             weight,
             meta,
@@ -446,6 +458,17 @@ impl RenderOnce for Card {
             }
         };
 
+        // The meta line is an element no reader can reach, so the description or the eyebrow
+        // stands in for it, and the explicit badge is read after them.
+        let about = [
+            description.or_else(|| eyebrow.clone()),
+            explicit.then(|| i18n::lookup("song-explicit", None)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|part| part.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
         let name = title.clone();
         let title = div()
             .id("card-title")
@@ -495,6 +518,8 @@ impl RenderOnce for Card {
                 false => gpui::accesskit::Role::Group,
             })
             .aria_label(name)
+            .when(!about.is_empty(), |this| this.aria_description(about))
+            .when(chosen, |this| this.aria_selected(true))
             .group(CARD_GROUP)
             .flex()
             .when_else(

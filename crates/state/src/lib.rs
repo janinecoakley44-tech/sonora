@@ -1,5 +1,6 @@
 mod artist;
 mod catalog;
+mod control;
 mod cover;
 mod detail;
 mod devices;
@@ -43,6 +44,7 @@ mod wake;
 mod window_shape;
 
 pub use artist::{ArtistDetail, ArtistDetailEvent};
+pub use control::Control;
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
 pub use devices::Devices;
@@ -53,7 +55,8 @@ pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
 pub use home::Home;
 pub use library::{
-    Addition, Library, LibraryEvent, LibraryPart, LibraryState, Problem, Ready, Shelf,
+    Addition, CoverEdit, Leaving, Library, LibraryEvent, LibraryPart, LibraryState, Problem, Ready,
+    Shelf, cover_problem,
 };
 pub use links::{Links, Opened};
 pub use logging::log_file;
@@ -201,6 +204,7 @@ pub(crate) fn settled<T>(result: Result<T>, cx: &mut gpui::App) -> std::result::
 
 pub struct Sonora {
     pub session: Entity<Session>,
+    pub control: Entity<Control>,
     pub cover: Entity<Cover>,
     pub devices: Entity<Devices>,
     pub downloads: Entity<Downloads>,
@@ -364,6 +368,7 @@ pub fn init(
         )
     });
     let links = cx.new(|cx| Links::new(session.clone(), devices.clone(), settings.clone(), cx));
+    let control = cx.new(|cx| Control::new(session.clone(), playback.clone(), library.clone(), cx));
     discord::attach(
         playback.clone(),
         settings.clone(),
@@ -376,6 +381,7 @@ pub fn init(
 
     cx.set_global(Sonora {
         session,
+        control,
         cover,
         devices,
         downloads,

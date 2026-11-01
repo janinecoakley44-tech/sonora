@@ -1029,6 +1029,7 @@ impl SettingsView {
             group_heading(label.clone(), icon, cx)
                 .id(SharedString::from(format!("settings-group-{key}")))
                 .role(Role::Heading)
+                .aria_level(2)
                 .aria_label(label)
         });
         let carded = cards.is_some();
@@ -1160,13 +1161,17 @@ impl SettingsView {
         let theme = *cx.theme();
         let hits = self.found(cx);
         if hits.is_empty() {
+            let empty = t!("search-no-matches");
             return div().child(
-                Vacancy::new(t!("search-no-matches"))
-                    .icon("icons/search.svg")
-                    .py_6(),
+                div()
+                    .id("settings-results-empty")
+                    .role(Role::Label)
+                    .aria_value(empty.clone())
+                    .child(Vacancy::new(empty).icon("icons/search.svg").py_6()),
             );
         }
         let row = snapped(theme.metrics.list_row, window);
+        let count = hits.len();
 
         // the cards pad their art in from their own edge, so the list reaches out by as much to
         // put the art in line with the column
@@ -1176,7 +1181,7 @@ impl SettingsView {
                     .rows(hits.iter().map(|_| row))
                     .draw(cx.processor(move |this: &mut Self, index: usize, _, cx| {
                         match hits.get(index) {
-                            Some((page, slot)) => this.result(index, *page, *slot, cx),
+                            Some((page, slot)) => this.result((index, count), *page, *slot, cx),
                             None => div().into_any_element(),
                         }
                     })),
@@ -1184,10 +1189,11 @@ impl SettingsView {
         )
     }
 
-    /// One search result: the setting's name over the page it lives on.
+    /// One search result, placed by its rank and the number of results: the setting's name over
+    /// the page it lives on.
     fn result(
         &self,
-        index: usize,
+        (index, count): (usize, usize),
         page: SettingsPage,
         slot: Slot,
         cx: &mut Context<Self>,
@@ -1206,11 +1212,17 @@ impl SettingsView {
             None => i18n::lookup(tab.key(), None),
         };
 
-        Card::new(("settings-result", index), title)
-            .fallback(tab.icon())
-            .meta(place)
-            .press(cx.listener(move |this, _, _, cx| this.open_result(page, slot, cx)))
-            .into_any_element()
+        Card::new(
+            SharedString::from(format!("settings-result-{}-{title}", page.id())),
+            title,
+        )
+        .aria_description(place.clone())
+        .aria_position_in_set(index + 1)
+        .aria_size_of_set(count)
+        .fallback(tab.icon())
+        .meta(place)
+        .press(cx.listener(move |this, _, _, cx| this.open_result(page, slot, cx)))
+        .into_any_element()
     }
 
     /// Opens the page a result lives on and scrolls its setting into view.

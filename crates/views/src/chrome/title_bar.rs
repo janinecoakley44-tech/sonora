@@ -210,6 +210,7 @@ impl TitleBar {
                         false => "icons/panel-right-open.svg",
                     })
                     .tooltip("nav-sidebar-right")
+                    .aria_expanded(open)
                     .on_click(
                         cx.listener(|_, _, _, cx| cx.emit(TitleBarEvent::ToggleSidebarRight)),
                     ),
@@ -235,6 +236,7 @@ impl TitleBar {
                     .small()
                     .icon(icon)
                     .tooltip("nav-sidebar")
+                    .aria_expanded(self.options.sidebar_open)
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(TitleBarEvent::ToggleSidebar))),
             )
     }

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use gpui::accesskit::Toggled;
 use gpui::prelude::*;
 use gpui::{App, Entity, SharedString, div};
 use i18n::t;
@@ -124,6 +125,7 @@ fn shuffle(playback: &Entity<Playback>, frosted: bool, cx: &App) -> Button {
         .small()
         .icon("icons/shuffle.svg")
         .indicator(on)
+        .aria_toggled(Toggled::from(on))
         .tooltip_above("player-shuffle")
         .tint(match on {
             true => theme.primary,

@@ -78,7 +78,7 @@ impl SettingsView {
     pub(super) fn version_row(&self) -> AnyElement {
         self.row(
             t!("settings-version"),
-            div().child(state::VERSION).into_any_element(),
+            ui::spoken("settings-version-value", state::VERSION).into_any_element(),
         )
     }
 
@@ -88,6 +88,7 @@ impl SettingsView {
         self.row(
             t!("settings-check-updates"),
             Switch::new("check-updates", on)
+                .name(t!("settings-check-updates"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_check_updates(!on, cx));
@@ -110,7 +111,12 @@ impl SettingsView {
             }),
         );
 
-        self.row(t!("settings-update-channel"), choices.into_any_element())
+        self.row(
+            t!("settings-update-channel"),
+            choices
+                .name(t!("settings-update-channel"))
+                .into_any_element(),
+        )
     }
 
     /// The row that opens a copy of the current log file in whatever the system reads text
@@ -162,6 +168,10 @@ impl SettingsView {
             .child(img(APP_ICON).size(tile).flex_none())
             .child(
                 div()
+                    .id("settings-about-name")
+                    .role(gpui::accesskit::Role::Heading)
+                    .aria_level(2)
+                    .aria_label(t!("settings-about-name"))
                     .text_size(theme.text(Text::Title))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("settings-about-name")),
@@ -172,6 +182,9 @@ impl SettingsView {
         let theme = *cx.theme();
 
         div()
+            .id("settings-notice")
+            .role(gpui::accesskit::Role::Paragraph)
+            .aria_label(t!("settings-notice"))
             .text_color(theme.muted_foreground)
             .text_size(theme.text(Text::Small))
             .child(t!("settings-notice"))
@@ -184,14 +197,21 @@ impl SettingsView {
         div()
             .flex()
             .flex_col()
-            .child(group_heading(
-                t!("settings-team"),
-                Some("icons/user-round.svg"),
-                cx,
-            ))
+            .child(
+                group_heading(t!("settings-team"), Some("icons/user-round.svg"), cx)
+                    .id("settings-team")
+                    .role(gpui::accesskit::Role::Heading)
+                    .aria_level(2)
+                    .aria_label(t!("settings-team")),
+            )
             .children(MEMBERS.into_iter().enumerate().map(|(index, member)| {
                 div()
                     .id(("team-member", index))
+                    .role(gpui::accesskit::Role::Link)
+                    .aria_label(member.login)
+                    .aria_description(member.role.label())
+                    .aria_position_in_set(index + 1)
+                    .aria_size_of_set(MEMBERS.len())
                     .flex()
                     .items_center()
                     .gap_3()

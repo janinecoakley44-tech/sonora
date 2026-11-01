@@ -3,6 +3,15 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+/// A size of the same cover that a provider can name without fetching anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverSize {
+    /// Big enough for a header or a desktop widget, 640 pixels on Spotify.
+    Large,
+    /// The original upload, for a cover that fills the screen.
+    Full,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserProfile {
     pub id: String,
@@ -232,6 +241,36 @@ pub struct GenreDetail {
     pub sections: Vec<GenreSection>,
 }
 
+impl GenreDetail {
+    /// The picture a tile for this genre wears: the first album cover on the page, else the
+    /// first playlist cover.
+    pub fn cover(&self) -> Option<String> {
+        let items = || self.sections.iter().flat_map(|section| &section.items);
+        let album = items().find_map(|item| match item {
+            GenreItem::Album(album) => album.cover.clone(),
+            _ => None,
+        });
+        album.or_else(|| {
+            items().find_map(|item| match item {
+                GenreItem::Playlist(playlist) => playlist.cover.clone(),
+                _ => None,
+            })
+        })
+    }
+}
+
+/// What reading a playlist file into the library came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportedPlaylist {
+    /// The playlist made from the file, or `None` when none of its songs is in the library,
+    /// in which case nothing was made.
+    pub playlist: Option<Playlist>,
+    /// The file's name without its extension, which the new playlist is called.
+    pub name: String,
+    /// How many entries named a file the library does not hold, and so were left out.
+    pub skipped: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrackTags {
     pub title: String,
@@ -278,6 +317,9 @@ pub struct SavedArtist {
 pub struct Artist {
     pub name: String,
     pub cover_large: Option<String>,
+    /// A wide picture for the top of the artist page, when the provider keeps one apart from
+    /// the portrait in `cover_large`.
+    pub banner: Option<String>,
     pub biography: Option<String>,
     pub monthly_listeners: Option<u64>,
     pub top_tracks: Vec<Track>,

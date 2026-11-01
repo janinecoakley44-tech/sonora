@@ -201,6 +201,8 @@ impl PlayerBar {
             .child(
                 div().w(width).flex_none().child(
                     Scrubber::new(&self.volume, level)
+                        .name(t!("equalizer-status-volume"))
+                        .value(percent(level))
                         .colors(theme.progress_bar, empty, theme.foreground)
                         .when_some(bubble, |this, (at, text)| this.bubble(at, text))
                         .on_move(cx.listener(|this, fraction: &f32, _, cx| {
@@ -208,10 +210,13 @@ impl PlayerBar {
                             this.volume_held = true;
                             this.muted = None;
                             this.playback
-                                .update(cx, |playback, cx| playback.set_volume(level, cx));
+                                .update(cx, |playback, cx| playback.slide_volume(level, cx));
+                            cx.notify();
                         }))
                         .on_release(cx.listener(|this, _: &MouseUpEvent, _, cx| {
                             this.volume_held = false;
+                            this.playback
+                                .update(cx, |playback, cx| playback.end_volume_slide(cx));
                             cx.notify();
                         })),
                 ),
@@ -313,12 +318,17 @@ impl PlayerBar {
         let shown = self.playback.read(cx).shown_track(cx);
         let track = shown.as_ref();
         let cover = track.and_then(|track| track.cover.clone());
+        let album = track.map(|track| match track.album.is_empty() {
+            true => t!("song-view-album"),
+            false => SharedString::from(track.album.clone()),
+        });
         div()
             .id("now-playing-artwork")
             .when_some(
                 track.and_then(|track| track.album_id.clone()),
                 |this, album| this.link(Destination::Album(album.into())),
             )
+            .when_some(album, |this, album| this.aria_label(album))
             .when(track.is_some(), |this| {
                 this.on_mouse_down(
                     MouseButton::Right,
@@ -344,11 +354,14 @@ impl PlayerBar {
         let title = match track {
             Some(track) => div()
                 .id("now-playing-track")
-                .aria_label(SharedString::from(track.name.clone()))
-                .when(track.album_id.is_some(), |this| this.role(Role::Link))
-                .when_some(track.album_id.clone(), |this, album_id| {
-                    this.hover(|style| style.underline())
-                        .link(Destination::Album(album_id.into()))
+                .map(|this| match track.album_id.clone() {
+                    Some(album_id) => this
+                        .aria_label(SharedString::from(track.name.clone()))
+                        .hover(|style| style.underline())
+                        .link(Destination::Album(album_id.into())),
+                    None => this
+                        .role(Role::Label)
+                        .aria_value(SharedString::from(track.name.clone())),
                 })
                 .on_mouse_down(
                     MouseButton::Right,
@@ -525,9 +538,8 @@ impl Render for PlayerBar {
             .or(self.pending)
             .map(|at| (at, clock(total.mul_f32(at))));
 
-        let clock_label = |value: Duration, align_end: bool| {
-            div()
-                .child(clock(value))
+        let clock_label = |id: &'static str, value: Duration, align_end: bool| {
+            ui::spoken(id, clock(value))
                 .w(clock_width)
                 .flex_none()
                 .whitespace_nowrap()
@@ -545,10 +557,12 @@ impl Render for PlayerBar {
             .items_center()
             .gap_2()
             .w_full()
-            .child(clock_label(elapsed, true))
+            .child(clock_label("player-elapsed", elapsed, true))
             .child(
                 div().flex_1().min_w_0().child(
                     Scrubber::new(&self.seek, progress)
+                        .name(t!("song-position"))
+                        .value(clock(elapsed))
                         .colors(theme.progress_bar, empty, theme.foreground)
                         .enabled(seekable)
                         .when_some(seek_bubble, |this, (at, text)| this.bubble(at, text))
@@ -561,7 +575,7 @@ impl Render for PlayerBar {
                         ),
                 ),
             )
-            .child(clock_label(total, false))
+            .child(clock_label("player-duration", total, false))
             .into_any_element();
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -763,7 +777,7 @@ impl Render for PlayerBar {
                     div()
                         .id("jam-people-open")
                         .role(Role::Button)
-                        .aria_label(text.clone())
+                        .aria_label(t!("devices-jam-people", count = jam.members.len()))
                         .relative()
                         .flex()
                         .flex_none()

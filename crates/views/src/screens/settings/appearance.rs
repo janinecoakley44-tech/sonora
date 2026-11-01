@@ -10,7 +10,7 @@ use ui::{
     Picker, Rounding, Scrubber, Switch, Theme, ThemeKind,
 };
 
-use super::rows::{grid, outward};
+use super::rows::{Announced as _, grid, outward};
 use super::{Group, SettingsView, Slot, TYPEFACES};
 use crate::shared::popups::matches_query;
 
@@ -182,6 +182,7 @@ impl SettingsView {
         }
 
         let picker = Picker::new(TYPEFACES, &self.popovers, current)
+            .name(t!("settings-typeface"))
             .width(Picker::WIDE)
             .menu(self.typefaces.menu("typefaces-menu", Picker::WIDE))
             .items(items)
@@ -220,6 +221,7 @@ impl SettingsView {
         self.row(
             t!("settings-blur"),
             Switch::new("blur", look.blur)
+                .name(t!("settings-blur"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let blur = !look.blur;
                     this.settings
@@ -241,6 +243,7 @@ impl SettingsView {
         self.row(
             t!("settings-blur-window"),
             Switch::new("blur-window", look.blur_window && !opaque)
+                .name(t!("settings-blur-window"))
                 .disabled(opaque)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let blur_window = !look.blur_window;
@@ -264,12 +267,13 @@ impl SettingsView {
         let look = self.look(cx);
         let overrides = self.settings.read(cx).theme_overrides();
 
-        let step = move |id: &'static str, label: &'static str, delta: f32| {
+        let step = move |id: &'static str, label: &'static str, name: &'static str, delta: f32| {
             let overrides = overrides.clone();
             let wanted = (look.font + delta).clamp(MIN_FONT, MAX_FONT);
 
             Button::new(id)
                 .label(label)
+                .name(i18n::lookup(name, None))
                 .small()
                 .outline()
                 .disabled(wanted == look.font)
@@ -292,9 +296,12 @@ impl SettingsView {
             .flex()
             .items_center()
             .gap_2()
-            .child(step("font-smaller", "−", -1.))
-            .child(div().child(t!("settings-font-value", size = look.font.round() as i64)))
-            .child(step("font-larger", "+", 1.));
+            .child(step("font-smaller", "−", "settings-font-smaller", -1.))
+            .child(ui::spoken(
+                "settings-font-value",
+                t!("settings-font-value", size = look.font.round() as i64),
+            ))
+            .child(step("font-larger", "+", "settings-font-larger", 1.));
 
         self.row(t!("settings-font"), actions.into_any_element())
     }
@@ -305,10 +312,12 @@ impl SettingsView {
         let chosen = self.settings.read(cx).icons().to_owned();
         let current = icons::pack(&chosen).unwrap_or_else(icons::active);
         let packs = icons::packs().collect::<Vec<_>>();
+        let count = packs.len();
 
-        grid(packs.len() as u16, window, cx)
-            .children(packs.into_iter().map(|pack| {
+        grid(count as u16, window, cx)
+            .children(packs.into_iter().enumerate().map(|(place, pack)| {
                 OptionCard::new(pack.id)
+                    .choice(pack.title(), pack.id == current.id, place, count)
                     .thumb_height(theme.metrics.list_row * 1.1)
                     .thumb(centred(samples(pack, theme.foreground)))
                     .label(pack.title())
@@ -328,20 +337,31 @@ impl SettingsView {
         let overrides = self.settings.read(cx).theme_overrides();
 
         grid(Rounding::ALL.len() as u16, window, cx)
-            .children(Rounding::ALL.into_iter().map(|rounding| {
-                let overrides = overrides.clone();
-                OptionCard::new(rounding.id())
-                    .thumb(corner(rounding, cx))
-                    .label(rounding.label())
-                    .selected(look.rounding == rounding)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings.update(cx, |settings, cx| {
-                            settings.set_rounding(rounding.id(), cx);
-                        });
-                        Theme::set(Look { rounding, ..look }, &overrides, cx);
-                        cx.notify();
-                    }))
-            }))
+            .children(
+                Rounding::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(place, rounding)| {
+                        let overrides = overrides.clone();
+                        OptionCard::new(rounding.id())
+                            .choice(
+                                rounding.label(),
+                                look.rounding == rounding,
+                                place,
+                                Rounding::ALL.len(),
+                            )
+                            .thumb(corner(rounding, cx))
+                            .label(rounding.label())
+                            .selected(look.rounding == rounding)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.settings.update(cx, |settings, cx| {
+                                    settings.set_rounding(rounding.id(), cx);
+                                });
+                                Theme::set(Look { rounding, ..look }, &overrides, cx);
+                                cx.notify();
+                            }))
+                    }),
+            )
             .into_any_element()
     }
 
@@ -368,6 +388,8 @@ impl SettingsView {
                     .w(theme.metrics.cover)
                     .child(
                         Scrubber::new(&self.opacity, value)
+                            .name(t!("settings-opacity"))
+                            .value(t!("settings-opacity-value", percent = percent))
                             .colors(theme.progress_bar, theme.muted, theme.foreground)
                             .on_move(cx.listener(move |this, fraction: &f32, _, cx| {
                                 let transparency = (1. - *fraction) * MAX_TRANSPARENCY;
@@ -389,12 +411,14 @@ impl SettingsView {
                     ),
             )
             .child(
-                div()
-                    .flex_none()
-                    .w(theme.metrics.control * 1.5)
-                    .whitespace_nowrap()
-                    .text_right()
-                    .child(t!("settings-opacity-value", percent = percent)),
+                ui::spoken(
+                    "settings-opacity-value",
+                    t!("settings-opacity-value", percent = percent),
+                )
+                .flex_none()
+                .w(theme.metrics.control * 1.5)
+                .whitespace_nowrap()
+                .text_right(),
             );
 
         self.row(t!("settings-opacity"), control.into_any_element())
@@ -422,6 +446,7 @@ impl SettingsView {
         self.row(
             t!("settings-adaptive"),
             Switch::new("adaptive-theme", on)
+                .name(t!("settings-adaptive"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let adaptive = !on;
                     let reset = adaptive && !neutral;

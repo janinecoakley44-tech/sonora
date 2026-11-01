@@ -193,6 +193,7 @@ impl Render for Toolbar {
                         })
                         .small()
                         .ghost()
+                        .aria_expanded(self.open)
                         .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
                 )
             })

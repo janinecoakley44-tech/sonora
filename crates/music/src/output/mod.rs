@@ -25,7 +25,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use cpal::traits::{DeviceTrait as _, HostTrait as _};
@@ -47,8 +47,12 @@ const BUFFER_FRAMES: u32 = 1024;
 const BUFFERS: [u32; 6] = [128, 256, 512, 1024, 2048, 4096];
 
 /// How often an open stream checks that its device is still the one `resolve_device` names and
-/// still runs at the stream's rate, and reads its sink again.
+/// still runs at the stream's rate, reads its sink again, and pauses once nothing plays on it.
 const DEVICE_POLL: Duration = Duration::from_millis(500);
+
+/// How many of the stream's buffers a resting stream plays out before it pauses. PulseAudio
+/// double-buffers and the sound server adds a quantum on top, so this covers both.
+const DRAIN_BUFFERS: u32 = 4;
 
 /// The device stream every output in the process mixes into.
 /// It runs at the rate the device runs at and closes when the last output on it drops.
@@ -316,6 +320,20 @@ struct Device {
     /// rodio's handle on the open cpal stream, and the mixer every engine's chain is added to.
     /// Dropping it closes the stream, which happens when the last output lets go of this device.
     stream: MixerDeviceSink,
+
+    /// Which outputs play on the stream, and whether it still runs for none of them.
+    activity: Mutex<Activity>,
+}
+
+/// How many outputs play on a stream, and since when it has run for none. A paused stream keeps
+/// what it holds and plays that first when it starts again, which after a seek or a reload is the
+/// old position, so a stream with nothing playing pauses only once its buffer has played out the
+/// silence behind the last sound. Paused, an idle mixer pulls nothing through the chains.
+#[derive(Default)]
+struct Activity {
+    playing: usize,
+    /// When the last output stopped, while the stream still runs to play its buffer out.
+    resting: Option<Instant>,
 }
 
 impl Device {
@@ -414,6 +432,7 @@ impl Device {
         let (name, _) = cpal_describe(&device);
         let failed = Arc::new(AtomicBool::new(false));
         let (stream, buffer) = open_stream(device, &id, &config, frames, &failed)?;
+        stream.pause();
         let buffers = buffers(&config, buffer);
         let sink = read_sink(&id);
         Ok(Self {
@@ -435,7 +454,51 @@ impl Device {
             listeners: Mutex::new(Vec::new()),
             sink: Mutex::new(sink),
             stream,
+            activity: Mutex::default(),
         })
+    }
+
+    /// Counts one more output playing, starting the stream for the first unless it still runs.
+    fn wake(&self) {
+        let mut activity = self.activity();
+        if activity.playing == 0 && activity.resting.take().is_none() {
+            self.stream.play();
+        }
+        activity.playing += 1;
+    }
+
+    /// Counts one output fewer playing. Once none is, the stream runs on until `settle` pauses it.
+    fn rest(&self) {
+        let mut activity = self.activity();
+        let Some(left) = activity.playing.checked_sub(1) else {
+            return;
+        };
+        activity.playing = left;
+        if left == 0 {
+            activity.resting = Some(Instant::now());
+        }
+    }
+
+    /// Pauses a stream nothing plays on once it has played its buffer out.
+    fn settle(&self) {
+        let mut activity = self.activity();
+        let drained = activity
+            .resting
+            .is_some_and(|since| since.elapsed() >= self.drain());
+        if activity.playing == 0 && drained {
+            self.stream.pause();
+            activity.resting = None;
+        }
+    }
+
+    /// How long the stream takes to play out everything it may hold.
+    fn drain(&self) -> Duration {
+        let frames = f64::from(self.info.buffer * DRAIN_BUFFERS);
+        Duration::from_secs_f64(frames / f64::from(self.info.format.rate.max(1)))
+    }
+
+    fn activity(&self) -> MutexGuard<'_, Activity> {
+        self.activity.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Whether outputs can still join this stream: it has reported no error, and the watcher has
@@ -597,6 +660,8 @@ pub(crate) struct Output {
     /// What every chunk appended to `sink` publishes its format into.
     format: audio::PublishedFormat,
     device: Arc<Device>,
+    /// Whether this output counts as playing on the device.
+    playing: AtomicBool,
 }
 
 impl Output {
@@ -615,11 +680,28 @@ impl Output {
             sink: Arc::new(sink),
             format,
             device,
+            playing: AtomicBool::new(false),
         })
     }
 
     pub fn sink(&self) -> &Arc<rodio::Player> {
         &self.sink
+    }
+
+    /// Plays the sink, starting the shared stream if it was resting.
+    pub fn play(&self) {
+        if !self.playing.swap(true, Ordering::Relaxed) {
+            self.device.wake();
+        }
+        self.sink.play();
+    }
+
+    /// Pauses the sink, and the shared stream once no other output plays and it has played out.
+    pub fn pause(&self) {
+        self.sink.pause();
+        if self.playing.swap(false, Ordering::Relaxed) {
+            self.device.rest();
+        }
     }
 
     /// Where a chunk appended to `sink` publishes its format, so the chain knows what it plays.
@@ -640,6 +722,14 @@ impl Output {
     /// longer be heard as it should. Every output on the stream sees it.
     pub fn failed(&self) -> bool {
         !self.device.live()
+    }
+}
+
+impl Drop for Output {
+    fn drop(&mut self) {
+        if *self.playing.get_mut() {
+            self.device.rest();
+        }
     }
 }
 
@@ -1100,7 +1190,8 @@ fn open_stream(
 
 /// Looks at `device` every `DEVICE_POLL` for as long as it is open, playing or not, and retires
 /// it once it is outdated, so its outputs reopen and a settings page reads the new stream. A sink
-/// whose port or rate moved is announced the same way.
+/// whose port or rate moved is announced the same way, and a stream nothing plays on is paused
+/// once it has played out.
 fn spawn_watcher(device: Weak<Device>) {
     let spawned = thread::Builder::new()
         .name("output-watch".to_owned())
@@ -1118,6 +1209,7 @@ fn spawn_watcher(device: Weak<Device>) {
                 if device.follow_sink() {
                     announce_device_changes();
                 }
+                device.settle();
             }
         });
     if let Err(error) = spawned {

@@ -309,9 +309,19 @@ impl Render for Input {
             // The focus handle doubles as the element id, since every field
             // owns one and it stays stable for the life of the field.
             .id(&self.focus_handle)
-            .role(gpui::accesskit::Role::TextInput)
-            .when(!self.hint.is_empty(), |this| {
-                this.aria_label(self.placeholder())
+            .role(match self.masked {
+                true => gpui::accesskit::Role::PasswordInput,
+                false => gpui::accesskit::Role::TextInput,
+            })
+            .map(|this| match self.name.as_ref() {
+                Some(key) => this
+                    .aria_label(i18n::lookup(key, None))
+                    .when(!self.hint.is_empty(), |this| {
+                        this.aria_placeholder(self.placeholder())
+                    }),
+                None => this.when(!self.hint.is_empty(), |this| {
+                    this.aria_label(self.placeholder())
+                }),
             })
             .when_some(
                 (!self.masked && !self.content.is_empty()).then(|| self.content.clone()),

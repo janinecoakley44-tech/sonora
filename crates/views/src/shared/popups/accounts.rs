@@ -70,6 +70,9 @@ impl RenderOnce for AccountPicker {
                             .id(SharedString::from(format!("account-{id}")))
                             .role(Role::Button)
                             .aria_label(SharedString::from(account.name.clone()))
+                            .when_some(account.detail.clone(), |this, detail| {
+                                this.aria_description(SharedString::from(detail))
+                            })
                             .aria_position_in_set(place + 1)
                             .aria_size_of_set(total)
                             .flex()
